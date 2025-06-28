@@ -1,132 +1,148 @@
-/* C Codes For AIR QUALITY MONITORING SYSTEM*/
+/*---------------------------------------------------------
+ * Title: Air Quality Monitoring System
+ * Author: Zaid Ali
+ * Email: zaidali.za2635@gmail.com
+ * Description:
+ * This program reads air quality using the MQ135 sensor,
+ * displays it on a 16x2 LCD, and sends real-time data
+ * over Wi-Fi using the ESP8266 module. It also uses
+ * a warning LED and a simple HTTP server.
+ *---------------------------------------------------------*/
 
 #include "MQ135.h"
 #include <SoftwareSerial.h>
-#define DEBUG true
-SoftwareSerial esp8266(9,10);                   // This makes pin 9 of Arduino as RX pin and pin 10 of Arduino as the TX pin
-const int sensorPin= 0;
-int air_quality;
 #include <LiquidCrystal.h>
- LiquidCrystal lcd(12,11, 5, 4, 3, 2);
+
+#define DEBUG true
+
+// Setup software serial pins for ESP8266
+SoftwareSerial esp8266(9, 10); // RX, TX
+
+// LCD pin mapping
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+// Sensor pin and variables
+const int sensorPin = A0;
+unsigned long systemStartTime = 0;
+int air_quality;
 
 void setup() {
-  pinMode(8, OUTPUT);
-   lcd.begin(16,2);
-   lcd.setCursor (0,0);
-   lcd.print ("circuitdigest ");
-   lcd.setCursor (0,1);
-   lcd.print ("Sensor Warming ");
-   delay(1000);
-   Serial.begin(115200);
-   esp8266.begin(115200);                                       //set esp's baud rate
-  sendData("AT+RST\r\n",2000,DEBUG);                            // reset module
-  sendData("AT+CWMODE=2\r\n",1000,DEBUG);                       // configure as access point
-  sendData("AT+CIFSR\r\n",1000,DEBUG);                          // get ip address
-  sendData("AT+CIPMUair_quality=1\r\n",1000,DEBUG);              // configure for multiple connections
-  sendData("AT+CIPSERVER=1,80\r\n",1000,DEBUG);                   // turn on server on port 80
-  pinMode(sensorPin, INPUT);                                       //Gas sensor will be an input to the arduino
+  pinMode(sensorPin, INPUT);
+  pinMode(8, OUTPUT); // Buzzer or LED indicator pin
+
+  // Initialize LCD
+  lcd.begin(16, 2);
+  lcd.setCursor(0, 0);
+  lcd.print("circuitdigest");
+  lcd.setCursor(0, 1);
+  lcd.print("Sensor Warming...");
+  delay(3000);
+
+  // Start serial connections
+  Serial.begin(115200);
+  esp8266.begin(115200);
+
+  // ESP8266 Configuration
+  sendData("AT+RST\r\n", 2000, DEBUG);           // Reset module
+  sendData("AT+CWMODE=2\r\n", 1000, DEBUG);      // Set to AP mode
+  sendData("AT+CIFSR\r\n", 1000, DEBUG);         // Get IP address
+  sendData("AT+CIPMUX=1\r\n", 1000, DEBUG);      // Enable multiple connections
+  sendData("AT+CIPSERVER=1,80\r\n", 1000, DEBUG);// Start server on port 80
+
   lcd.clear();
- }
+  systemStartTime = millis(); // Record system start time
+}
 
 void loop() {
-  MQ135 gasSensor = MQ135(A0);
+  MQ135 gasSensor = MQ135(sensorPin);
   float air_quality = gasSensor.getPPM();
-   if(esp8266.available())                                 // check if the esp is sending a message
-       {
-         if(esp8266.find("+IPD,"))
-          {
-               delay(1000);
-                int connectionId = esp8266.read()-48;               /* We are subtracting 48 from the output because the read() function returns the ASCII decimal value and the first decimal number which is 0 starts at 48*/
-                String webpage = "<h1>IOT Air Pollution Monitoring System</h1>";
-                webpage += "<p><h2>";
-                 webpage+= " Air Quality is ";
-                 webpage+= air_quality;
-                 webpage+=" PPM";
-                  webpage += "<p>";
-     if (air_quality<=1000)
-         {
-           webpage+= "Fresh Air";
-          }
 
-    else if(air_quality<=2000 && air_quality>=1000)
-         {
-             webpage+= "Poor Air";
-         }
+  // Handle HTTP Requests
+  if (esp8266.available()) {
+    if (esp8266.find("+IPD,")) {
+      delay(1000);
+      int connectionId = esp8266.read() - 48;
 
-    else if (air_quality>=2000 )
-       {
-          webpage+= "Danger! Move to Fresh Air";
-       }
+      String webpage = "<html><head><title>Air Quality Monitor</title></head><body>";
+      webpage += "<h1>IOT Air Pollution Monitoring</h1>";
+      webpage += "<p><strong>Air Quality:</strong> ";
+      webpage += air_quality;
+      webpage += " PPM</p>";
 
-    webpage += "</h2></p></body>";
-     String cipSend = "AT+CIPSEND=";
-     cipSend += connectionId;
-     cipSend += ",";
-     cipSend +=webpage.length();
-     cipSend +="\r\n";
+      if (air_quality <= 1000) {
+        webpage += "<p>Status: Fresh Air</p>";
+      } else if (air_quality <= 2000) {
+        webpage += "<p>Status: Poor Air</p>";
+      } else {
+        webpage += "<p>Status: <b>Danger!</b> Move to Fresh Air</p>";
+      }
 
-     sendData(cipSend,1000,DEBUG);
-     sendData(webpage,1000,DEBUG);
+      // Show uptime
+      unsigned long uptime = (millis() - systemStartTime) / 1000;
+      webpage += "<p>System Uptime: ";
+      webpage += uptime;
+      webpage += " seconds</p>";
 
-     cipSend = "AT+CIPSEND=";
-     cipSend += connectionId;
-     cipSend += ",";
-     cipSend +=webpage.length();
-     cipSend +="\r\n";
+      webpage += "</body></html>";
 
-     String closeCommand = "AT+CIPCLOSE=";
-     closeCommand+=connectionId; // append connection id
-     closeCommand+="\r\n";
+      // Send response
+      String cipSend = "AT+CIPSEND=" + String(connectionId) + "," + String(webpage.length()) + "\r\n";
+      sendData(cipSend, 1000, DEBUG);
+      sendData(webpage, 1000, DEBUG);
 
-     sendData(closeCommand,3000,DEBUG);
+      // Close connection
+      String closeCommand = "AT+CIPCLOSE=" + String(connectionId) + "\r\n";
+      sendData(closeCommand, 1000, DEBUG);
     }
   }
 
-  lcd.setCursor (0, 0);
- lcd.print ("Air Quality is ");
- lcd.print (air_quality);
- lcd.print (" PPM ");
- lcd.setCursor (0,1);
+  // LCD Output
+  lcd.setCursor(0, 0);
+  lcd.print("Air: ");
+  lcd.print(air_quality);
+  lcd.print(" PPM     ");
 
-  if (air_quality<=1000)
-    {
-      lcd.print("Fresh Air");
-      digitalWrite(8, LOW);
-    }
-  else if( air_quality>=1000 && air_quality<=2000 )
-    {
-      lcd.print("Poor Air, Open Windows");
-      digitalWrite(8, HIGH );
-    }
-else if (air_quality>=2000 )
-   {
-     lcd.print("Danger! Move to Fresh Air");
-     digitalWrite(8, HIGH);                                 // turn the LED on
-   }
-lcd.scrollDisplayLeft();
-delay(1000);
- }
-String sendData(String command, const int timeout, boolean debug)
-  {
-    String response = "";
-    esp8266.print(command);                            // send the read character to the esp8266
-    long int time = millis();
+  lcd.setCursor(0, 1);
+  if (air_quality <= 1000) {
+    lcd.print("Status: Fresh Air ");
+    digitalWrite(8, LOW);
+  } else if (air_quality <= 2000) {
+    lcd.print("Status: Poor Air  ");
+    digitalWrite(8, HIGH);
+  } else {
+    lcd.print("!!!DANGEROUS!!!   ");
+    digitalWrite(8, HIGH);
+  }
 
-    while( (time+timeout) > millis())
-      {
-        while(esp8266.available())
-          {
-              // The esp has data so display its output to the serial window
-                char c = esp8266.read(); // read the next character.
-               response+=c;
-           }
-      }
-
-    if(debug)
-       {
-         Serial.print(response);
-       }
-   return response;
+  delay(1000); // Delay for 1 second
 }
-//Contact Zaid ali
-//zaidali.za2635@gmail.com
+
+// Function to send AT command and get response from ESP8266
+String sendData(String command, const int timeout, boolean debug) {
+  String response = "";
+  esp8266.print(command);
+  long int time = millis();
+
+  while ((millis() - time) < timeout) {
+    while (esp8266.available()) {
+      char c = esp8266.read();
+      response += c;
+    }
+  }
+
+  if (debug) {
+    Serial.print("[ESP8266 Response] ");
+    Serial.println(response);
+  }
+
+  return response;
+}
+
+/* 
+ * Contact:
+ * 👨‍💻 Zaid Ali
+ * 📧 zaidali.za2635@gmail.com
+ * 📞 +91 7275591869
+ * 📍 Kanpur, India
+ * 💻 Project: Air Quality Monitoring System (IoT + LCD + ESP8266)
+ */
